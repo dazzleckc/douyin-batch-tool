@@ -70,9 +70,8 @@ class DoubaoClient:
             f"视频链接：{video_url}\n标题：{title}"
         )
 
-        input_selector = 'textarea[placeholder*="输入"], [contenteditable="true"]'
-        send_selector = 'button[type="submit"], .send-btn'
-        response_selector = '.message-content, .markdown-body, .ds-markdown'
+        input_selector = 'textarea[placeholder="发消息..."]'
+        response_selector = '.semi-markdown, [class*="markdown"], [class*="message"]'
 
         for retry in range(3):  # AC-008: 最多重试 2 次（共 3 次尝试）
             try:
@@ -83,12 +82,9 @@ class DoubaoClient:
                 await page.fill(input_selector, prompt)
                 await asyncio.sleep(1)
 
-                # 点击发送按钮或按 Enter
-                send_btn = await page.query_selector(send_selector)
-                if send_btn:
-                    await send_btn.click()
-                else:
-                    await page.keyboard.press("Enter")
+                # 按 Enter 发送
+                await page.keyboard.press("Enter")
+                await asyncio.sleep(1)
 
                 # 等待豆包回复——最长等待 120 秒（视频分析需要时间）
                 await asyncio.sleep(5)  # 先等一会儿让豆包开始处理
