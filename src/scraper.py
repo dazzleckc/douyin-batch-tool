@@ -22,14 +22,15 @@ from src.config import Config
 from src.models import VideoInfo
 
 # ---------------------------------------------------------------------------
-# DOM 选择器常量（占位值，需根据抖音实际 DOM 结构调整）
+# DOM 选择器常量
+# 抖音页面结构经常变化，优先匹配语义化的 a[href] 而非 class 名
 # ---------------------------------------------------------------------------
 SELECTORS: dict[str, str] = {
-    "video_item": 'ul li a[href*="/video/"]',
-    "video_title": ".title",
-    "video_desc": ".desc",
-    "user_not_found": '[class*="error"]',
-    "private_account": '[class*="lock"]',
+    "video_item": 'a[href*="/video/"]',
+    "video_title": 'p, span',
+    "video_desc": 'p, span',
+    "user_not_found": '[class*="error"], [class*="not-found"]',
+    "private_account": '[class*="lock"], [class*="private"]',
     "no_content": '[class*="empty"]',
 }
 
@@ -100,13 +101,20 @@ class VideoScraper:
         page: Page = await context.new_page()
 
         try:
-            # 1) 导航到博主主页
+            # 1) 先访问抖音首页（模拟自然浏览，绕过"新Tab"拦截）
+            try:
+                await page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=30_000)
+                await asyncio.sleep(random.uniform(2, 4))
+            except Exception as exc:
+                raise ScraperError(f"抖音首页加载失败: {exc}") from exc
+
+            # 2) 再导航到博主主页
             try:
                 await page.goto(user_page_url, wait_until="domcontentloaded", timeout=30_000)
             except Exception as exc:
                 raise ScraperError(f"页面加载超时或失败: {exc}") from exc
 
-            # 2) 等待首屏关键元素（用于判断页面状态）
+            # 3) 等待首屏渲染，判断页面状态
             await asyncio.sleep(random.uniform(2, 5))
             await self._detect_error_state(page)
 
@@ -114,7 +122,12 @@ class VideoScraper:
             videos = await self._scroll_and_extract(page, limit)
 
             if not videos:
-                raise NoVideosError(f"博主 {sec_uid} 没有可采集的公开视频")
+                # 保存截图帮助调试
+                try:
+                    await page.screenshot(path="debug_scraper_failure.png", full_page=True)
+                except Exception:
+                    pass
+                raise NoVideosError(f"博主 {sec_uid} 没有可采集的公开视频（截图已保存到 debug_scraper_failure.png）")
 
             return videos
 
