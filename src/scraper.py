@@ -156,7 +156,10 @@ class VideoScraper:
                 raise ScraperError(f"页面加载超时或失败: {exc}") from exc
 
             # 3) 等待首屏视频列表渲染（SPA 需要额外等待）
-            await asyncio.sleep(random.uniform(3, 6))
+            await asyncio.sleep(random.uniform(5, 8))
+            # 主动滚动触发懒加载
+            await page.evaluate("window.scrollTo(0, 600)")
+            await asyncio.sleep(2)
             await self._detect_error_state(page)
 
             # 3) 滚动加载并提取视频列表
