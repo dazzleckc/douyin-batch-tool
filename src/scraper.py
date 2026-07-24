@@ -97,25 +97,33 @@ class VideoScraper:
         cookies = self._parse_cookie(self._config.douyin_cookie)
         user_page_url = f"https://www.douyin.com/user/{sec_uid}"
 
-        context = await self._create_context(cookies)
+        context = await self._create_context({})  # 先不注入 Cookie
         page: Page = await context.new_page()
 
         try:
-            # 1) 先访问抖音首页（模拟自然浏览，绕过"新Tab"拦截）
+            # 1) 先访问抖音首页，建立域名上下文
             try:
                 await page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=30_000)
                 await asyncio.sleep(random.uniform(2, 4))
             except Exception as exc:
                 raise ScraperError(f"抖音首页加载失败: {exc}") from exc
 
-            # 2) 再导航到博主主页
+            # 2) 现在注入 Cookie（必须先访问域名后 Cookie 才能生效）
+            cookie_list = [
+                {"name": name, "value": value, "domain": ".douyin.com", "path": "/"}
+                for name, value in cookies.items()
+            ]
+            if cookie_list:
+                await context.add_cookies(cookie_list)
+
+            # 2) 再导航到博主主页，等待 JS 渲染完成
             try:
-                await page.goto(user_page_url, wait_until="domcontentloaded", timeout=30_000)
+                await page.goto(user_page_url, wait_until="networkidle", timeout=60_000)
             except Exception as exc:
                 raise ScraperError(f"页面加载超时或失败: {exc}") from exc
 
-            # 3) 等待首屏渲染，判断页面状态
-            await asyncio.sleep(random.uniform(2, 5))
+            # 3) 等待首屏视频列表渲染（SPA 需要额外等待）
+            await asyncio.sleep(random.uniform(3, 6))
             await self._detect_error_state(page)
 
             # 3) 滚动加载并提取视频列表
@@ -245,6 +253,11 @@ class VideoScraper:
         if not_found is not None:
             text = await not_found.inner_text()
             if "不存在" in text or "not found" in text.lower():
+                raise UserNotFoundError(f"博主不存在: {current_url}")
+        else:
+            # 兜底：检查页面主体文本
+            body_text = await page.text_content("body") or ""
+            if "用户不存在" in body_text or "作品不存在" in body_text:
                 raise UserNotFoundError(f"博主不存在: {current_url}")
 
         private_el = await page.query_selector(SELECTORS["private_account"])
