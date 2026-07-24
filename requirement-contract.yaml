@@ -1,0 +1,799 @@
+# =============================================================================
+# 需求契约 (Requirement Contract)
+# 项目：抖音博主视频批量采集与 AI 提纲解析工具
+# 产出者：徐清楚（产品分析师）
+# 任务：G1 - 需求契约产出与确认
+# 状态：proposed（待用户确认）
+# =============================================================================
+
+meta:
+  task_id: "G1"
+  analyst: "徐清楚"
+  role: "产品分析师"
+  status: "proposed"
+  baseline: "G0_BASELINE_KNOWN=passed"
+  created_at: "2025-07-24"
+  target_platform: "国内版抖音 (Douyin)"
+  ai_service: "豆包大模型（火山引擎 ARK API）"
+  tech_stack: "Python 3.13"
+  deliverable_type: "命令行批处理工具"
+
+# =============================================================================
+# 1. 原始需求
+# =============================================================================
+original_requirement:
+  verbatim: |
+    "我想对某个抖音博主的所有视频，获取到视频url和标题，然后交给ai（比如豆包）
+    进行解析并获取文字提纲的一个批处理工具"
+  summary: |
+    用户需要一个批处理工具，针对指定抖音博主，批量采集其所有视频的 URL 和标题，
+    然后调用豆包 AI 对视频内容进行解析，生成文字提纲。
+
+# =============================================================================
+# 2. 目标分析——还原真实目标
+# =============================================================================
+goal_analysis:
+  real_goal: |
+    用户的核心目标是：给定一个抖音博主身份，自动、批量地获得该博主所有视频的
+    结构化内容摘要（文字提纲），而非手动逐个观看和记录。
+
+    用户要的不是"采集 URL + 标题"，也不是"调用 AI"——这些都是手段。
+    真正的结果是一份可阅读、可检索的视频内容提纲清单。
+
+  who: "内容研究者 / 自媒体运营者 / 竞品分析人员"
+  scenario: |
+    用户关注或需要研究某个抖音博主的内容体系，但手动浏览数十甚至数百个视频
+    效率极低。需要自动化工具完成"采集 → 理解 → 摘要"的流水线。
+  expected_change: |
+    从"花数小时手动浏览视频并记录笔记"变为"运行一条命令，等待输出结构化提纲文件"。
+
+  # --- 事实、假设与待决策 ---
+  confirmed_facts:
+    - fact: "目标平台是国内版抖音 (Douyin)，非 TikTok"
+      source: "主理人确认"
+    - fact: "AI 服务为字节跳动豆包大模型，通过火山引擎 API 接入"
+      source: "主理人确认"
+    - fact: "工具形态为命令行批处理工具，非 Web 应用"
+      source: "用户需求 + 主理人确认"
+    - fact: "技术栈 Python 3.13"
+      source: "G0 基线报告"
+    - fact: "项目目录为空，无现有代码和约束"
+      source: "G0 基线报告"
+
+  assumptions:
+    - assumption: "用户拥有或能获取抖音登录态（Cookie/Token），工具自身不实现自动登录"
+      reason: "抖音反爬严格，未登录状态几乎无法获取任何有效数据"
+      risk_if_wrong: "工具完全无法工作，需要引入浏览器自动化登录或手动 Cookie 注入方案"
+    - assumption: "用户已注册火山引擎账号并获取豆包 API Key"
+      reason: "豆包 API 需要鉴权"
+      risk_if_wrong: "AI 解析环节无法执行"
+    - assumption: "博主视频数量在合理范围内（<1000），非百万粉超级头部博主"
+      reason: "影响批处理时间预估和 API 调用成本"
+      risk_if_wrong: "运行时间从分钟级变为小时级，API 费用大幅增加"
+    - assumption: "豆包大模型支持视频内容直接理解（多模态），或至少能通过视频帧+音频转文字理解内容"
+      reason: "用户说'交给AI解析'，隐含视频内容级别的理解"
+      risk_if_wrong: "退化为仅基于标题生成提纲，信息量大打折扣"
+    - assumption: "用户需要的提纲格式是结构化的 Markdown 或 JSON，而非纯文本流水账"
+      reason: "提纲的语义暗示了层级结构和要点罗列"
+      risk_if_wrong: "输出格式需要调整"
+
+  open_decisions:
+    - id: "OD-001"
+      question: "数据采集方式：使用哪种方案获取抖音视频列表？"
+      options:
+        - "方案A：浏览器自动化（Playwright），模拟用户行为爬取"
+        - "方案B：抖音开放平台官方 API（需开发者资质，能力有限）"
+        - "方案C：第三方数据服务（如新榜、飞瓜等，需付费）"
+        - "方案D：用户手动提供 Cookie，工具用 HTTP 请求模拟"
+      impact: "决定工具的技术架构、稳定性、合规风险和维护成本"
+      recommendation: "方案A（Playwright），理由：可用性强、无需额外付费、能绕过大部分反爬"
+      decision_by: "主理人 / 用户"
+
+    - id: "OD-002"
+      question: "豆包 AI 的视频理解方式是什么？"
+      options:
+        - "方案A：直接传视频 URL 给豆包多模态模型（如 doubao-vision）"
+        - "方案B：先下载视频 → 抽帧 → 转音频文字 → 将文字+帧图传给豆包文本模型"
+        - "方案C：仅基于视频标题和描述文本生成提纲（最轻量）"
+      impact: "决定 AI 调用成本、处理速度和提纲质量"
+      recommendation: "方案C 作为 MVP，方案A 作为增强——先确认标题提纲能否满足用户"
+      decision_by: "主理人 / 用户"
+
+    - id: "OD-003"
+      question: "是否需要增量采集（已处理视频跳过）？"
+      options:
+        - "是——维护本地已处理记录，重复执行时只处理新视频"
+        - "否——每次全量采集和处理"
+      impact: "影响存储设计、运行效率和 API 成本"
+      recommendation: "是，作为基本功能而非可选功能"
+      decision_by: "主理人 / 用户"
+
+    - id: "OD-004"
+      question: "输入方式：用户如何指定目标博主？"
+      options:
+        - "命令行参数：--user-url https://www.douyin.com/user/xxx"
+        - "配置文件：config.yaml 中预设博主列表"
+        - "交互式输入：运行后提示输入"
+      impact: "影响 CLI 设计和使用体验"
+      recommendation: "命令行参数为主，配置文件支持批量博主为推迟功能"
+      decision_by: "主理人 / 用户"
+
+    - id: "OD-005"
+      question: "抖音数据采集的合规边界：用户是否知悉并接受数据抓取的法律风险？"
+      options:
+        - "已了解并接受——工具仅供个人研究使用"
+        - "需要进一步法律评估"
+      impact: "决定是否需要在工具中加入合规声明和免责提示"
+      recommendation: "工具启动时展示合规免责声明"
+      decision_by: "主理人 / 用户"
+
+# =============================================================================
+# 3. 范围定义
+# =============================================================================
+scope:
+  in_scope:
+    - id: "SCOPE-001"
+      item: "接收并解析目标抖音博主身份标识（主页 URL 或用户 ID）"
+    - id: "SCOPE-002"
+      item: "批量采集指定博主的所有公开视频的 URL 和标题"
+    - id: "SCOPE-003"
+      item: "将采集到的视频信息逐条发送给豆包 AI，获取文字提纲"
+    - id: "SCOPE-004"
+      item: "将结果（视频URL、标题、AI提纲）输出为结构化文件（JSON 或 Markdown）"
+    - id: "SCOPE-005"
+      item: "增量处理：记录已处理视频，重复运行时跳过"
+    - id: "SCOPE-006"
+      item: "命令行接口：参数化指定博主、输出路径、并发数等"
+    - id: "SCOPE-007"
+      item: "处理进度展示（当前第 N/M 个视频）"
+    - id: "SCOPE-008"
+      item: "错误恢复：单个视频处理失败不影响整体流程，记录失败项"
+    - id: "SCOPE-009"
+      item: "启动时的合规免责声明展示"
+
+  out_of_scope:
+    - id: "OUT-001"
+      item: "视频文件下载（仅采集元数据和 URL）"
+    - id: "OUT-002"
+      item: "实时监控博主新视频（非持续运行的服务）"
+    - id: "OUT-003"
+      item: "GUI 或 Web 界面"
+    - id: "OUT-004"
+      item: "多博主并行采集（MVP 阶段单博主处理）"
+    - id: "OUT-005"
+      item: "定时任务调度（用户自行用 cron/任务计划程序触发）"
+    - id: "OUT-006"
+      item: "数据分析、趋势图表、可视化"
+    - id: "OUT-007"
+      item: "抖音登录模块（用户自行提供 Cookie/登录态）"
+    - id: "OUT-008"
+      item: "评论区采集"
+    - id: "OUT-009"
+      item: "视频转文字/字幕提取"
+    - id: "OUT-010"
+      item: "博主粉丝数据、点赞数等社交指标采集"
+
+# =============================================================================
+# 4. 奥卡姆剃刀评估
+# =============================================================================
+occam_razor:
+  keep:
+    - item: "博主身份输入与解析"
+      reason: "没有它就不知道采集谁"
+    - item: "视频列表采集（URL + 标题）"
+      reason: "核心输入源，不可替代"
+    - item: "AI 提纲生成"
+      reason: "用户的最终目的"
+    - item: "结果文件输出"
+      reason: "没有输出则工具无意义"
+    - item: "错误恢复与失败记录"
+      reason: "批处理工具的基本可靠性要求"
+    - item: "增量跳过"
+      reason: "避免重复 API 调用浪费成本，且批处理天然需要重复执行"
+
+  defer:
+    - item: "多博主批量处理"
+      reason: "MVP 验证后再扩展，循环调用单博主模式也能间接满足"
+    - item: "配置文件支持"
+      reason: "命令行参数已能满足 MVP"
+    - item: "输���格式多选（JSON/Markdown/CSV）"
+      reason: "先支持一种，明确需求后再扩展"
+    - item: "日志级别控制"
+      reason: "调试阶段用 print，成熟后再引入 logging 框架"
+
+  suggest_remove:
+    - item: "无"
+      reason: "当前需求范围内没有投机性功能需要移除"
+
+  need_confirm:
+    - item: "视频内容级别的 AI 理解（多模态）还是仅基于标题生成提纲"
+      reason: "成本差异巨大，且用户可能高估了 AI 能力边界"
+      related_decision: "OD-002"
+    - item: "采集方式的技术方案选择"
+      reason: "直接影响可行性和开发周期"
+      related_decision: "OD-001"
+
+# =============================================================================
+# 5. 需求清单 (Requirements)
+# =============================================================================
+requirements:
+  - id: "REQ-001"
+    title: "博主身份输入"
+    description: |
+      用户通过命令行参数指定目标抖音博主。
+      支持输入形式：抖音主页 URL（如 https://www.douyin.com/user/MS4wLjABAAAA...）
+      或抖音号/用户短 ID。
+    rationale: "没有博主身份就无法执行任何后续步骤"
+    priority: "P0 - 必须"
+
+  - id: "REQ-002"
+    title: "视频列表采集"
+    description: |
+      采集指定博主的所有公开视频的 URL 和标题。
+      采集过程需模拟正常用户浏览行为以避免触发反爬。
+      视频需按发布时间排序（最新在前或最旧在前可配置）。
+    rationale: "视频 URL 和标题是 AI 解析的输入源"
+    priority: "P0 - 必须"
+
+  - id: "REQ-003"
+    title: "豆包 AI 提纲生成"
+    description: |
+      对每个视频，将其标题（以及可选的描述/元数据）发送给豆包大模型，
+      要求 AI 生成该视频内容的文字提纲。
+      提纲应包含层级结构（一级要点、二级子要点），格式为 Markdown。
+    rationale: "这是用户的核心诉求——获得视频内容的结构化摘要"
+    priority: "P0 - 必须"
+
+  - id: "REQ-004"
+    title: "结构化结果输出"
+    description: |
+      将所有结果输出为一个结构化文件，每条记录包含：
+      - 视频 URL
+      - 视频标题
+      - AI 生成的文字提纲
+      - 处理时间戳
+      默认输出 JSON 格式，保存至用户指定或默认路径。
+    rationale: "批处理工具必须有可用的输出产物"
+    priority: "P0 - 必须"
+
+  - id: "REQ-005"
+    title: "增量处理"
+    description: |
+      维护已处理视频记录（基于视频唯一 ID）。
+      重复运行时自动跳过已处理的视频，仅处理新视频。
+    rationale: "避免重复调用豆包 API 浪费成本，支持分批处理"
+    priority: "P1 - 应该"
+
+  - id: "REQ-006"
+    title: "处理进度显示"
+    description: |
+      运行时在终端显示进度：当前处理第 N 个，共 M 个；
+      显示每个视频的处理状态（成功/失败/跳过）。
+    rationale: "长时间运行的批处理需要可观测性"
+    priority: "P1 - 应该"
+
+  - id: "REQ-007"
+    title: "错误恢复与失败记录"
+    description: |
+      单个视频采集或 AI 调用失败时，记录错误信息并继续处理后续视频。
+      运行结束后输出失败清单（视频 URL + 失败原因），
+      以便用户手动处理或重新运行。
+    rationale: "批处理不能因单个失败而整体中断"
+    priority: "P0 - 必须"
+
+  - id: "REQ-008"
+    title: "合规免责声明"
+    description: |
+      工具启动时展示合规免责声明：
+      提醒用户本工具仅供个人学习研究，不得用于商业目的；
+      提醒用户遵守抖音用户协议和相关法律法规。
+    rationale: "数据采集存在法律灰色地带，工具必须做风险提示"
+    priority: "P1 - 应该"
+
+  - id: "REQ-009"
+    title: "请求频率控制"
+    description: |
+      对抖音页面请求和豆包 API 调用实施可配置的间隔控制，
+      避免触发频率限制或 API 限流。
+      默认值：抖音请求间隔 2-5 秒（随机），豆包 API 遵循其官方频率限制。
+    rationale: "保证采集稳定性，避免 IP/账号被封"
+    priority: "P0 - 必须"
+
+# =============================================================================
+# 6. 验收标准 (Acceptance Criteria)
+# =============================================================================
+acceptance_criteria:
+  - id: "AC-001"
+    title: "命令行参数解析正确"
+    covers: ["REQ-001"]
+    given: "用户执行命令并传入抖音博主主页 URL"
+    when: "工具启动并解析参数"
+    then: "成功提取博主标识并开始采集流程"
+
+  - id: "AC-002"
+    title: "无效输入给出明确提示"
+    covers: ["REQ-001"]
+    given: "用户传入非抖音 URL 或空参数"
+    when: "工具启动并尝试解析"
+    then: "输出明确错误信息并退出，退出码非零"
+
+  - id: "AC-003"
+    title: "视频列表采集成功"
+    covers: ["REQ-002"]
+    given: "有效的博主标识且网络可达"
+    when: "工具执行采集阶段"
+    then: "获得该博主至少一条公开视频的 URL 和标题"
+
+  - id: "AC-004"
+    title: "博主无公开视频"
+    covers: ["REQ-002"]
+    given: "博主账号存在但无公开视频（或全部私密）"
+    when: "工具执行采集阶段"
+    then: "输出'未找到公开视频'信息并正常退出"
+
+  - id: "AC-005"
+    title: "博主不存在"
+    covers: ["REQ-002"]
+    given: "博主账号不存在或已注销"
+    when: "工具执行采集阶段"
+    then: "输出'博主不存在或无法访问'错误信息并退出"
+
+  - id: "AC-006"
+    title: "AI 提纲生成成功"
+    covers: ["REQ-003"]
+    given: "有效的视频标题和豆包 API Key"
+    when: "调用豆包 AI 要求生成提纲"
+    then: |
+      返回结构化文字提纲，包含至少两级层级（如一级标题和二级要点），
+      内容与视频标题语义相关
+
+  - id: "AC-007"
+    title: "AI API 鉴权失败"
+    covers: ["REQ-003"]
+    given: "豆包 API Key 无效或未配置"
+    when: "调用豆包 API"
+    then: "输出明确鉴权错误信息并退出，提示用户检查 API Key 配置"
+
+  - id: "AC-008"
+    title: "AI API 超时重试"
+    covers: ["REQ-003"]
+    given: "豆包 API 首次调用超时"
+    when: "达到超时阈值（默认 60 秒）"
+    then: "自动重试最多 2 次，均失败后记录该视频为失败并继续处理下一个"
+
+  - id: "AC-009"
+    title: "结果文件输出正确"
+    covers: ["REQ-004"]
+    given: "至少一个视频处理成功"
+    when: "工具运行完成"
+    then: |
+      输出 JSON 文件包含所有视频记录，每条记录含 url/title/outline/timestamp 字段；
+      JSON 格式有效可解析
+
+  - id: "AC-010"
+    title: "增量跳过已验证视频"
+    covers: ["REQ-005"]
+    given: "同一博主已成功处理 N 个视频"
+    when: "再次运行同一博主"
+    then: "已处理的视频被跳过，仅处理新视频；输出中标注跳过数量"
+
+  - id: "AC-011"
+    title: "进度信息实时可见"
+    covers: ["REQ-006"]
+    given: "正在处理多个视频"
+    when: "处理过程中"
+    then: "终端实时显示当前进度（如 [3/15] 处理中...）"
+
+  - id: "AC-012"
+    title: "单个失败不影响整体"
+    covers: ["REQ-007"]
+    given: "某个视频的 AI 调用返回错误"
+    when: "该错误发生"
+    then: "工具继续处理后续视频；运行结束后输出包含该失败项的错误清单"
+
+  - id: "AC-013"
+    title: "合规声明展示"
+    covers: ["REQ-008"]
+    given: "工具启动"
+    when: "任何运行模式下"
+    then: "终端展示合规免责声明文本"
+
+  - id: "AC-014"
+    title: "网络中断恢复"
+    covers: ["REQ-007", "REQ-009"]
+    given: "采集过程中网络中断"
+    when: "发生网络错误"
+    then: "已成功采集的数据不丢失；工具以非零退出码退出并给出明确错误信息"
+
+# =============================================================================
+# 7. 最小真实业务路径 (Golden Path)
+# =============================================================================
+golden_path:
+  id: "GP-001"
+  actor: "用户（内容研究者）"
+  preconditions:
+    - "Python 3.13 已安装"
+    - "豆包 API Key 已配置（环境变量或配置文件）"
+    - "抖音 Cookie/登录态已配置（方案待 OD-001 决定）"
+    - "网络连接正常"
+    - "目标博主账号存在且有公开视频"
+  entry: |
+    用户在终端执行：
+    `python main.py --user https://www.douyin.com/user/MS4wLjABAAAAxxxx`
+  steps:
+    - step: 1
+      action: "工具启动，展示合规免责声明"
+      user_observable: "终端显示免责文本"
+    - step: 2
+      action: "解析命令行参数，提取博主标识"
+      user_observable: "终端显示：目标博主已识别：@博主昵称"
+    - step: 3
+      action: "加载本地处理记录，确定哪些视频已处理"
+      user_observable: "终端显示：已处理 0 个视频，开始采集..."
+    - step: 4
+      action: "逐页采集视频列表（URL + 标题），展示进度"
+      user_observable: "终端显示：正在采集第 1 页... 发现 15 个视频"
+    - step: 5
+      action: "遍历视频列表，对每个未处理的视频调用豆包 AI"
+      user_observable: "终端显示：[3/15] 正在解析：《视频标题》..."
+    - step: 6
+      action: "收集所有结果，写入输出 JSON 文件"
+      user_observable: "终端显示：结果已保存至 ./output/结果_20250724.json"
+    - step: 7
+      action: "更新本地处理记录"
+      user_observable: "终端显示：完成！15/15 成功，0 失败"
+  expected_result: |
+    用户获得一个 JSON 文件，包含 15 条记录，每条包含视频 URL、标题和 AI 生成的文字提纲。
+    文件可在任意文本编辑器或 Markdown 渲染器中查看。
+  evidence: |
+    验证者应检查：
+    (1) JSON 文件存在��格式有效
+    (2) 每条记录包含 url/title/outline/timestamp 四个字段
+    (3) outline 内容为结构化中文提纲，非空字符串
+    (4) 再次运行同一博主应跳过所有已处理视频
+
+# =============================================================================
+# 8. 测试场景 (Test Scenarios)
+# =============================================================================
+test_scenarios:
+  - id: "TC-001"
+    title: "Golden Path——全新博主全量处理"
+    covers_req: ["REQ-001", "REQ-002", "REQ-003", "REQ-004"]
+    covers_ac: ["AC-001", "AC-003", "AC-006", "AC-009", "AC-011"]
+    type: "Golden Path"
+    description: |
+      对一个新的博主，执行完整采集+解析流程。
+      验证从输入到输出的端到端链路正常工作。
+
+  - id: "TC-002"
+    title: "增量跳过——重复运行"
+    covers_req: ["REQ-005"]
+    covers_ac: ["AC-010"]
+    type: "正常路径"
+    description: |
+      先成功处理一个博主的 10 个视频。修改输出路径后再运行同一博主。
+      验证仅处理新增视频（如有），其余全部跳过。
+
+  - id: "TC-003"
+    title: "博主无公开视频"
+    covers_req: ["REQ-002"]
+    covers_ac: ["AC-004"]
+    type: "边界条件"
+    description: |
+      指定一个存在但无公开视频的博主。
+      验证工具给出明确提示并正常退出，不崩溃。
+
+  - id: "TC-004"
+    title: "博主不存在/已注销"
+    covers_req: ["REQ-002"]
+    covers_ac: ["AC-005"]
+    type: "边界条件"
+    description: |
+      传入一个不存在的抖音用户 ID。
+      验证工具识别为不可访问并退出，非零退出码。
+
+  - id: "TC-005"
+    title: "无效命令行输入"
+    covers_req: ["REQ-001"]
+    covers_ac: ["AC-002"]
+    type: "反例"
+    description: |
+      不传参数、传入非 URL 字符串、传入其他平台 URL。
+      验证每种情况都给出明确错误提示。
+
+  - id: "TC-006"
+    title: "豆包 API Key 无效"
+    covers_req: ["REQ-003"]
+    covers_ac: ["AC-007"]
+    type: "反例"
+    description: |
+      配置无效的 API Key 后运行。
+      验证工具明确报告鉴权失败并退出，不产生无效输出文件。
+
+  - id: "TC-007"
+    title: "豆包 API 超时与重试"
+    covers_req: ["REQ-003", "REQ-007"]
+    covers_ac: ["AC-008"]
+    type: "边界条件"
+    description: |
+      模拟豆包 API 响应超过超时阈值。
+      验证自动重试机制生效，且最终失败时记录到错误清单而非崩溃。
+
+  - id: "TC-008"
+    title: "部分视频 AI 解析失败"
+    covers_req: ["REQ-007"]
+    covers_ac: ["AC-012"]
+    type: "异常路径"
+    description: |
+      10 个视频中�� 3 和第 7 个 AI 调用失败。
+      验证：其余 8 个正常处理；失败的两个出现在错误清单中；退出码为零（部分成功）
+
+  - id: "TC-009"
+    title: "网络中断"
+    covers_req: ["REQ-007"]
+    covers_ac: ["AC-014"]
+    type: "异常路径"
+    description: |
+      采集过程中模拟网络断开。
+      验证：已采集数据不丢失；工具以非零退出码退出；错误信息清晰
+
+  - id: "TC-010"
+    title: "博主视频数量极多"
+    covers_req: ["REQ-002", "REQ-006", "REQ-009"]
+    covers_ac: ["AC-003", "AC-011"]
+    type: "边界条件"
+    description: |
+      博主有 500+ 个视频（触发翻页）。
+      验证分页采集正常工作，进度显示正确累加，不因长时间运行而内存泄漏。
+
+  - id: "TC-011"
+    title: "首次运行无处理记录"
+    covers_req: ["REQ-005"]
+    covers_ac: ["AC-010"]
+    type: "边界条件"
+    description: |
+      本地处理记录文件不存在时的首次运行。
+      验证正常初始化，不因缺少文件而报错。
+
+  - id: "TC-012"
+    title: "合规声明始终展示"
+    covers_req: ["REQ-008"]
+    covers_ac: ["AC-013"]
+    type: "正常路径"
+    description: |
+      在任何参数组合下启动工具。
+      验证合规声明在工具执行任何实际操作前显示。
+
+  - id: "TC-013"
+    title: "AI 返回空或无意义内容"
+    covers_req: ["REQ-003", "REQ-007"]
+    covers_ac: ["AC-006"]
+    type: "边界条件"
+    description: |
+      豆包 AI 返回空字符串或不包含结构化提纲的内容。
+      验证工具将此视频标记为"提纲质量异常"但仍记录原始 AI 输出。
+
+  - id: "TC-014"
+    title: "视频标题含特殊字符"
+    covers_req: ["REQ-004"]
+    covers_ac: ["AC-009"]
+    type: "边界条件"
+    description: |
+      视频标题包含 emoji、换行符、HTML 实体等特殊字符。
+      验证 JSON 文件正确转义，可正常解析。
+
+# =============================================================================
+# 9. 非功能需求 (Non-Functional Requirements)
+# =============================================================================
+non_functional_requirements:
+  - id: "NFR-001"
+    category: "可靠性"
+    description: "单个视频处理失败不影响其余视频处理"
+    measurement: "部分成功时退出码为零，失败项记录在错误清单中"
+    applies_to: ["REQ-007"]
+
+  - id: "NFR-002"
+    category: "性能"
+    description: |
+      抖音页面请求间隔默认 2-5 秒随机，豆包 API 遵循官方频率限制。
+      具体并发数和间隔应可配置。
+    measurement: "配置文件或 CLI 参数可修改间隔值"
+    applies_to: ["REQ-009"]
+
+  - id: "NFR-003"
+    category: "安全性"
+    description: "API Key 和 Cookie 不得明文硬编码在代码中"
+    measurement: "支持通过环境变量读取敏感配置；代码审查无硬编码密钥"
+    applies_to: ["REQ-003", "REQ-002"]
+
+  - id: "NFR-004"
+    category: "可维护性"
+    description: "输出文件命名包含博主标识和日期，便于追溯"
+    measurement: "文件名为 {博主标识}_{日期}.json 格式"
+    applies_to: ["REQ-004"]
+
+  - id: "NFR-005"
+    category: "兼容性"
+    description: "工具应在 macOS 和 Linux 上可运行"
+    measurement: "macOS (Python 3.13) 上验证通过；不依赖 Windows 特有 API"
+    applies_to: ["REQ-001", "REQ-002"]
+
+  - id: "NFR-006"
+    category: "可观测性"
+    description: "运行时输出足够信息让用户了解进度和问题"
+    measurement: "终端输出包含：当前步骤、进度百分比、成功/失败统计"
+    applies_to: ["REQ-006", "REQ-007"]
+
+# =============================================================================
+# 10. 追踪矩阵 (Traceability Matrix)
+# =============================================================================
+traceability:
+  - req: "REQ-001"
+    ac: ["AC-001", "AC-002"]
+    tc: ["TC-001", "TC-005"]
+    type: "核心功能"
+  - req: "REQ-002"
+    ac: ["AC-003", "AC-004", "AC-005"]
+    tc: ["TC-001", "TC-003", "TC-004", "TC-010"]
+    type: "核心功能"
+  - req: "REQ-003"
+    ac: ["AC-006", "AC-007", "AC-008"]
+    tc: ["TC-001", "TC-006", "TC-007", "TC-013"]
+    type: "核心功能"
+  - req: "REQ-004"
+    ac: ["AC-009"]
+    tc: ["TC-001", "TC-014"]
+    type: "核心功能"
+  - req: "REQ-005"
+    ac: ["AC-010"]
+    tc: ["TC-002", "TC-011"]
+    type: "增量功能"
+  - req: "REQ-006"
+    ac: ["AC-011"]
+    tc: ["TC-001", "TC-010"]
+    type: "体验功能"
+  - req: "REQ-007"
+    ac: ["AC-012", "AC-014"]
+    tc: ["TC-007", "TC-008", "TC-009", "TC-013"]
+    type: "可靠性"
+  - req: "REQ-008"
+    ac: ["AC-013"]
+    tc: ["TC-012"]
+    type: "合规"
+  - req: "REQ-009"
+    ac: ["AC-014"]
+    tc: ["TC-007", "TC-010"]
+    type: "可靠性"
+
+# =============================================================================
+# 11. Impact 与风险评估
+# =============================================================================
+impacts:
+  - area: "用户行为"
+    description: |
+      用户从手动浏览变为命令行操作。需要基本终端使用能力。
+      原本需要数小时的工作可能缩短到数十分钟。
+    severity: "中等"
+
+  - area: "业务规则"
+    description: |
+      工具不存储或分发视频内容，仅保存 URL 和 AI 生成的提纲。
+      提纲是 AI 的衍生创作，非原始视频内容复制。
+    severity: "低"
+
+  - area: "数据与隐私"
+    description: |
+      处理记录和输出文件中包含视频 URL 和标题——属于公开信息。
+      但 API Key 和 Cookie 是敏感凭据，需安全存储。
+    severity: "高"
+
+  - area: "合规性"
+    description: |
+      抖音用户协议禁止未经许可的自动化数据采集。
+      工具必须展示免责声明，且用户需自行承担使用风险。
+      豆包 AI 使用需遵循火山引擎服务条款。
+    severity: "高"
+
+  - area: "兼容性"
+    description: |
+      依赖抖音前端 DOM 结构（若用 Playwright 方案），
+      抖音改版可能导致采集失败。需持续维护选择器。
+    severity: "中高"
+
+  - area: "交付范围"
+    description: |
+      数据采集方案的可行性（OD-001）是最大不确定性。
+      如果方案A/B/C/D都不可行，项目可能需要重新评估。
+    severity: "高"
+
+risks:
+  - id: "RISK-001"
+    title: "抖音反爬导致采集失败"
+    trigger: "抖音更新反爬策略或检测到自动化行为"
+    impact: "工具完全无法采集视频列表，核心功能失效"
+    likelihood: "中高"
+    severity: "严重"
+    mitigation: "使用 Playwright 模拟真实浏览器；随机化操作间隔；必要时降级为用户手动粘贴页面源码"
+    decision_needed_by: "架构师"
+
+  - id: "RISK-002"
+    title: "豆包 API 成本不可控"
+    trigger: "博主视频数量远超预期（如 5000+）"
+    impact: "单次运行 API 费用可能高达数十至上百元"
+    likelihood: "中"
+    severity: "中等"
+    mitigation: "运行前显示预估视频数量并请求确认；支持--limit 参数限制处理数量"
+    decision_needed_by: "主理人 / 用户"
+
+  - id: "RISK-003"
+    title: "豆包 API 视频理解能力不足"
+    trigger: "豆包多模态模型无法有效理解抖音视频内容"
+    impact: "生成提纲质量差，用户不满意，工具价值大打折扣"
+    likelihood: "中"
+    severity: "中高"
+    mitigation: "MVP 先用标题+描述生成提纲；验证效果后再决定是否引入帧提取等多模态方案"
+    decision_needed_by: "主理人 / 用户"
+
+  - id: "RISK-004"
+    title: "抖音改版破坏采集选择器"
+    trigger: "抖音 Web 版更新页面结构"
+    impact: "Playwright 选择器失效，采集失败"
+    likelihood: "中"
+    severity: "中等"
+    mitigation: "选择器配置外部化（独立配置文件）；添加采集前自检步骤"
+    decision_needed_by: "架构师"
+
+  - id: "RISK-005"
+    title: "账号安全风险"
+    trigger: "用户使用个人抖音账号 Cookie 进行自动化操作"
+    impact: "抖音可能将该行为判定为异常并限制账号功能"
+    likelihood: "低中"
+    severity: "中高"
+    mitigation: "合规声明必须醒目；建议用户使用测试账号；采集频率温和"
+    decision_needed_by: "主理人 / 用户"
+
+# =============================================================================
+# 12. 待确认清单 (For Confirmation)
+# =============================================================================
+for_confirmation:
+  - id: "CONFIRM-001"
+    item: "数据采集方案选择（OD-001）"
+    recommendation: "Playwright 浏览器自动化"
+    reason: "平衡可用性和维护成本"
+    ask: "请确认是否接受 Playwright 方案，或有其他偏好？"
+
+  - id: "CONFIRM-002"
+    item: "AI 视频理解深度（OD-002）"
+    recommendation: "MVP 先基于标题+描述元数据生成提纲"
+    reason: "控制成本和复杂度，快速验证核心价值"
+    ask: "仅基于标题和描述生成提纲是否满足需求？还是必须视频内容级别的理解？"
+
+  - id: "CONFIRM-003"
+    item: "增量采集为默认行为（OD-003）"
+    recommendation: "默认开启增量，提供 --no-skip 参数强制全量"
+    reason: "节省 API 成本，批处理场景的核心需求"
+    ask: "增量跳过已处理视频是否为必须功能？"
+
+  - id: "CONFIRM-004"
+    item: "输入方式（OD-004）"
+    recommendation: "命令行参数 --user，后续可扩展配置文件"
+    reason: "符合 CLI 工具惯例，MVP 最简单可用"
+    ask: "命令行 --user 参数方式是否满足需求？"
+
+  - id: "CONFIRM-005"
+    item: "合规风险认知（OD-005）"
+    recommendation: "工具启动时展示免责声明，不做硬性阻止"
+    reason: "平衡工具可用性和法律风险提示"
+    ask: "请确认用户已知悉并接受数据采集的法律风险？"
+
+  - id: "CONFIRM-006"
+    item: "输出格式"
+    recommendation: "默认 JSON，内部提纲字段为 Markdown 文本"
+    reason: "JSON 程序友好，Markdown 人类可读，兼顾两者"
+    ask: "JSON + 内部 Markdown 提纲的组合是否满足需求？"
+
+  - id: "CONFIRM-007"
+    item: "视频数量上限"
+    recommendation: "运行前展示预估视频数并要求确认，支持 --limit 参数"
+    reason: "防止意外的高额 API 费用"
+    ask: "是否需要视频数量确认机制和 --limit 参数？"
