@@ -122,12 +122,14 @@ class VideoScraper:
             videos = await self._scroll_and_extract(page, limit)
 
             if not videos:
-                # 保存截图帮助调试
+                # 保存页面源码帮助调试
                 try:
-                    await page.screenshot(path="debug_scraper_failure.png", full_page=True)
+                    html = await page.content()
+                    with open("debug_scraper_page.html", "w", encoding="utf-8") as f:
+                        f.write(html[:50000])  # 前 50KB 足够
                 except Exception:
                     pass
-                raise NoVideosError(f"博主 {sec_uid} 没有可采集的公开视频（截图已保存到 debug_scraper_failure.png）")
+                raise NoVideosError(f"博主 {sec_uid} 没有可采集的公开视频（页面源码已保存到 debug_scraper_page.html）")
 
             return videos
 
