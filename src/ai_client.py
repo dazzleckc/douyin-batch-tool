@@ -90,11 +90,7 @@ class DoubaoClient:
 
     async def generate_outline(self, title: str, video_url: str, description: str = "") -> OutlineResult:
         """贴视频 URL 到豆包，等待回复，提取提纲（增量提取法）。"""
-        prompt = (
-            f"请分析这个视频的内容，并生成一份结构化的文字提纲"
-            f"（含两级层级，一级要点和二级子要点），以 Markdown 格式输出。\n"
-            f"视频链接：{video_url}\n标题：{title}"
-        )
+        prompt = f"{video_url}\n标题：{title}"
 
         input_selector = 'textarea[placeholder="发消息..."]'
 
