@@ -64,12 +64,13 @@ async def run_pipeline(
     db = ProcessDB()
     doubao_cookies = {}
     if config.doubao_cookie:
+        from urllib.parse import unquote
         for part in config.doubao_cookie.split(";"):
             if "=" in part:
                 k, _, v = part.strip().partition("=")
                 k = k.strip().lower()
                 if k not in ("domain", "path", "expires", "max-age", "secure", "httponly", "samesite"):
-                    doubao_cookies[k] = v.strip()
+                    doubao_cookies[k] = unquote(v.strip())
     doubao = DoubaoClient(headless=config.headless, cookies=doubao_cookies)
 
     try:

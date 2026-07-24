@@ -47,10 +47,11 @@ class DoubaoClient:
         self._page = await context.new_page()
         await self._page.goto(self.DOUBAO_CHAT_URL, wait_until="domcontentloaded", timeout=30000)
 
-        # 注入豆包 Cookie（如果有）
+        # 注入豆包 Cookie（如果有）—— 值需 URL 解码（DevTools 复制的 Cookie 是 URL-encoded）
         if self._cookies:
+            from urllib.parse import unquote
             cookie_list = [
-                {"name": name, "value": value, "domain": ".doubao.com", "path": "/"}
+                {"name": name, "value": unquote(value), "domain": ".doubao.com", "path": "/"}
                 for name, value in self._cookies.items()
             ]
             await context.add_cookies(cookie_list)
