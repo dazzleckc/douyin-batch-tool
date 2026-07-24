@@ -66,16 +66,7 @@ class DoubaoClient:
         return self._page
 
     async def generate_outline(self, title: str, video_url: str, description: str = "") -> OutlineResult:
-        """贴视频 URL 到豆包，等待回复，提取提纲。
-
-        Args:
-            title: 视频标题。
-            video_url: 视频链接 URL。
-            description: 视频描述（可选）。
-
-        Returns:
-            OutlineResult: 包含提纲 Markdown 和原始响应。失败时 success=False。
-        """
+        """贴视频 URL 到豆包，等待回复，提取提纲（增量提取法）。"""
         prompt = (
             f"请分析这个视频的内容，并生成一份结构化的文字提纲"
             f"（含两级层级，一级要点和二级子要点），以 Markdown 格式输出。\n"
@@ -83,74 +74,67 @@ class DoubaoClient:
         )
 
         input_selector = 'textarea[placeholder="发消息..."]'
-        response_selector = '.semi-markdown, [class*="markdown"], [class*="message"]'
 
-        for retry in range(3):  # AC-008: 最多重试 2 次（共 3 次尝试）
+        for retry in range(3):
             try:
                 page = await self._ensure_page()
 
-                # 定位输入框并输入
+                # 填入 prompt
                 await page.wait_for_selector(input_selector, timeout=10000)
                 await page.fill(input_selector, prompt)
                 await asyncio.sleep(1)
 
-                # 按 Enter 发送
-                await page.keyboard.press("Enter")
-                await asyncio.sleep(1)
-
-                # 等待豆包回复——最长等待 120 秒（视频分析需要时间）
-                await asyncio.sleep(5)  # 先等一会儿让豆包开始处理
+                # 记录发送前页面文本
                 try:
-                    await page.wait_for_selector(response_selector, timeout=120000)
-                    await asyncio.sleep(3)  # 等完整内容渲染
-                    response_text = await page.text_content(response_selector) or ""
+                    before = await page.evaluate("() => document.body.innerText")
                 except Exception:
-                    # 等待超时，尝试获取任意回复内容
-                    await asyncio.sleep(10)
-                    response_text = await page.text_content("body") or ""
+                    before = ""
 
-                # 清理输入框准备下一次
+                # 发送
+                await page.keyboard.press("Enter")
+
+                # 轮询等待 AI 回复（最长 120s）
+                response_text = ""
+                for _ in range(60):  # 60 × 2s
+                    await asyncio.sleep(2)
+                    try:
+                        now = await page.evaluate("() => document.body.innerText")
+                    except Exception:
+                        continue
+                    if now and len(now) > len(before) + 100:
+                        # 提取增量
+                        idx = now.find(prompt)
+                        new = now[idx + len(prompt):].strip() if idx >= 0 else now[len(before):].strip()
+                        if len(new) > 100:
+                            # 再等 5 秒确保回复完整
+                            await asyncio.sleep(5)
+                            try:
+                                now2 = await page.evaluate("() => document.body.innerText")
+                                idx2 = now2.find(prompt)
+                                response_text = now2[idx2 + len(prompt):].strip() if idx2 >= 0 else new
+                            except Exception:
+                                response_text = new
+                            break
+
+                # 清理输入框
                 try:
                     await page.fill(input_selector, "")
                 except Exception:
-                    pass  # 页面可能已变化，清理失败不影响结果
+                    pass
 
                 if response_text and len(response_text.strip()) > 50:
-                    return OutlineResult(
-                        aweme_id="",
-                        outline_markdown=response_text.strip(),
-                        raw_response=response_text.strip(),
-                        success=True
-                    )
+                    return OutlineResult("", response_text.strip(), response_text.strip(), True)
 
-                # 响应过短：如果不是最后一次尝试则重试
                 if retry < 2:
-                    # 重新导航到 /chat/ 准备下一次尝试
                     await page.goto(self.DOUBAO_CHAT_URL, wait_until="domcontentloaded", timeout=30000)
-                    await asyncio.sleep(2)  # 等页面稳定
+                    await asyncio.sleep(2)
                     continue
-                else:
-                    # 最后一次尝试也过短，返回失败
-                    return OutlineResult(
-                        aweme_id="",
-                        outline_markdown="",
-                        raw_response=response_text,
-                        success=False,
-                        error_message="豆包返回内容过短或为空（已重试 2 次）"
-                    )
+                return OutlineResult("", "", response_text, False, "豆包返回内容过短（已重试 2 次）")
 
             except DoubaoError:
-                # 登录失败等明确错误：不重试，直接向上抛出
                 raise
             except Exception as e:
-                # 页面崩溃等非重试异常：不重试，直接返回失败
-                return OutlineResult(
-                    aweme_id="",
-                    outline_markdown="",
-                    raw_response=str(e),
-                    success=False,
-                    error_message=f"豆包调用失败: {str(e)}"
-                )
+                return OutlineResult("", "", str(e), False, f"豆包调用失败: {e}")
 
     async def close(self):
         """关闭浏览器资源。"""
