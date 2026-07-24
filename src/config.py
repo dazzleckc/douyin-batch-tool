@@ -13,6 +13,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -28,10 +29,8 @@ class Config:
 
     必填字段通过 .env / 环境变量注入，可选字段提供合理默认值。
     """
-    ark_api_key: str
     douyin_cookie: str
-    ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
-    ark_model: str = "doubao-seed-1-6-251015"
+    ark_api_key: Optional[str] = None
     output_dir: str = "./output"
     request_interval_min: float = 2.0
     request_interval_max: float = 5.0
@@ -41,8 +40,8 @@ class Config:
 def load_config() -> Config:
     """从 .env 文件与环境变量加载配置。
 
-    调用 load_dotenv() 后逐项读取 os.getenv()；必填项 ARK_API_KEY
-    和 DOUYIN_COOKIE 缺失或为空时抛出 ConfigurationError。
+    调用 load_dotenv() 后逐项读取 os.getenv()；必填项 DOUYIN_COOKIE
+    缺失或为空时抛出 ConfigurationError。
 
     Returns:
         Config: 已填充的配置对象。
@@ -63,13 +62,11 @@ def load_config() -> Config:
         print("[配置] .env 文件存在但未能加载，请检查文件格式。")
 
     # 读取必填配置
-    ark_api_key = os.getenv("ARK_API_KEY", "").strip()
+    ark_api_key = os.getenv("ARK_API_KEY", "").strip() or None
     douyin_cookie = os.getenv("DOUYIN_COOKIE", "").strip()
 
     # 校验必填项
     missing: list[str] = []
-    if not ark_api_key:
-        missing.append("ARK_API_KEY")
     if not douyin_cookie:
         missing.append("DOUYIN_COOKIE")
     if missing:
@@ -79,10 +76,6 @@ def load_config() -> Config:
         )
 
     # 读取可选配置（使用默认值）
-    ark_base_url = os.getenv(
-        "ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"
-    ).strip()
-    ark_model = os.getenv("ARK_MODEL", "doubao-seed-1-6-251015").strip()
     output_dir = os.getenv("OUTPUT_DIR", "./output").strip()
     request_interval_min = _parse_float(
         os.getenv("REQUEST_INTERVAL_MIN"), 2.0
@@ -97,8 +90,6 @@ def load_config() -> Config:
     return Config(
         ark_api_key=ark_api_key,
         douyin_cookie=douyin_cookie,
-        ark_base_url=ark_base_url,
-        ark_model=ark_model,
         output_dir=output_dir,
         request_interval_min=request_interval_min,
         request_interval_max=request_interval_max,

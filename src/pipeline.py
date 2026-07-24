@@ -29,7 +29,7 @@ from src.config import Config
 from src.models import VideoInfo, OutlineResult, OutputRecord, PipelineResult
 from src.db import ProcessDB
 from src.scraper import VideoScraper
-from src.ai_client import AIClient, AuthError
+from src.ai_client import DoubaoClient
 from src.output import write_results, generate_output_filename
 
 
@@ -45,7 +45,7 @@ async def run_pipeline(
 
     1. 创建 VideoScraper → 采集视频列表
     2. 创建 ProcessDB → 逐视频检查去重（no_skip 时跳过检查）
-    3. 创建 AIClient → 对未处理视频生成提纲（try/except）
+    3. 创建 DoubaoClient → 对未处理视频生成提纲
     4. 收集 OutputRecord → 调用 write_results
     5. 返回 PipelineResult（含统计）
 
@@ -62,7 +62,7 @@ async def run_pipeline(
     """
     scraper = VideoScraper(config)
     db = ProcessDB()
-    ai = AIClient(config)
+    doubao = DoubaoClient(headless=config.headless)
 
     try:
         # ---- 1) 采集视频列表 ----
@@ -89,27 +89,7 @@ async def run_pipeline(
                 continue
 
             # 2b) AI 解析
-            try:
-                result = ai.generate_outline(video.title, video.description)
-            except AuthError:
-                raise
-            except Exception as exc:
-                # AuthError / TimeoutError 等不可恢复异常
-                records.append(OutputRecord(
-                    url=video.url,
-                    title=video.title,
-                    outline="",
-                    timestamp=datetime.now().isoformat(),
-                    status="failed",
-                ))
-                errors.append({
-                    "aweme_id": video.aweme_id,
-                    "url": video.url,
-                    "error": str(exc),
-                })
-                failed += 1
-                db.mark_failed(video.aweme_id, str(exc))
-                continue
+            result = await doubao.generate_outline(video.title, video.url, video.description)
 
             if result.success:
                 records.append(OutputRecord(
@@ -164,6 +144,10 @@ async def run_pipeline(
             pass
         try:
             db.close()
+        except Exception:
+            pass
+        try:
+            await doubao.close()
         except Exception:
             pass
 

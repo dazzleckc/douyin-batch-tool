@@ -1,130 +1,134 @@
-"""豆包 AI 客户端：通过火山引擎 ARK OpenAI 兼容接口调用豆包大模型生成视频文字提纲。
+"""豆包 AI 客户端：通过 Playwright 自动化 doubao.com，贴视频 URL 让豆包生成提纲。
 
 用法：
-    from src.config import Config
-    from src.ai_client import AIClient
+    from src.ai_client import DoubaoClient
 
-    config = Config(...)
-    client = AIClient(config)
-    result = client.generate_outline("视频标题", description="视频描述")
+    doubao = DoubaoClient(headless=True)
+    result = await doubao.generate_outline("视频标题", "https://...", "描述")
     if result.success:
         print(result.outline_markdown)
+    await doubao.close()
 """
 
-from openai import OpenAI
+import asyncio
+import re
+from typing import Optional
+from playwright.async_api import async_playwright, Page, Browser
 
-from src.config import Config
 from src.models import OutlineResult
 
 
-class AIError(Exception):
-    """AI 客户端通用异常。"""
+class DoubaoError(Exception):
+    """豆包客户端通用异常。"""
 
 
-class AuthError(AIError):
-    """鉴权失败异常（401/403），不重试。"""
+class DoubaoClient:
+    """通过 Playwright 自动化 doubao.com，贴视频 URL 让豆包生成提纲。"""
 
+    DOUBAO_URL = "https://www.douyin.com"  # 先访问抖音保持 Cookie 域一致
+    DOUBAO_CHAT_URL = "https://www.doubao.com/chat/"
 
-class TimeoutError(AIError):
-    """请求超时异常。SDK 自带 max_retries 已处理重试。"""
+    def __init__(self, headless: bool = True):
+        self._headless = headless
+        self._playwright = None
+        self._browser: Optional[Browser] = None
+        self._page: Optional[Page] = None
 
-
-class AIClient:
-    """豆包大模型客户端，通过火山引擎 ARK 的 OpenAI 兼容接口调用。"""
-
-    def __init__(self, config: Config) -> None:
-        """初始化 OpenAI 兼容客户端，指向 ARK 端点。
-
-        Args:
-            config: 包含 ark_api_key 和 ark_base_url 的配置对象。
-        """
-        self._config = config
-        self._client = OpenAI(
-            api_key=config.ark_api_key,
-            base_url=config.ark_base_url,
+    async def _ensure_page(self):
+        if self._page is not None:
+            return self._page
+        self._playwright = await async_playwright().start()
+        self._browser = await self._playwright.chromium.launch(headless=self._headless)
+        context = await self._browser.new_context(
+            viewport={"width": 1280, "height": 900},
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
         )
+        self._page = await context.new_page()
+        await self._page.goto(self.DOUBAO_CHAT_URL, wait_until="domcontentloaded", timeout=30000)
+        return self._page
 
-    def generate_outline(self, title: str, description: str = "") -> OutlineResult:
-        """对单个视频标题+描述调用豆包 API，返回结构化提纲。
+    async def generate_outline(self, title: str, video_url: str, description: str = "") -> OutlineResult:
+        """贴视频 URL 到豆包，等待回复，提取提纲。
 
         Args:
             title: 视频标题。
+            video_url: 视频链接 URL。
             description: 视频描述（可选）。
 
         Returns:
             OutlineResult: 包含提纲 Markdown 和原始响应。失败时 success=False。
         """
-        prompt = self._build_prompt(title, description)
-
         try:
-            response = self._client.chat.completions.create(
-                model=self._config.ark_model,
-                messages=[{"role": "user", "content": prompt}],
-                timeout=60,
-                max_retries=2,
+            page = await self._ensure_page()
+
+            prompt = (
+                f"请分析这个视频的内容，并生成一份结构化的文字提纲"
+                f"（含两级层级，一级要点和二级子要点），以 Markdown 格式输出。\n"
+                f"视频链接：{video_url}\n标题：{title}"
             )
-            outline_md = response.choices[0].message.content or ""
+
+            # 定位输入框并输入（选择器为占位值，需实测调整）
+            input_selector = 'textarea[placeholder*="输入"], [contenteditable="true"]'
+            await page.wait_for_selector(input_selector, timeout=10000)
+            await page.fill(input_selector, prompt)
+            await asyncio.sleep(1)
+
+            # 点击发送按钮或按 Enter
+            send_selector = 'button[type="submit"], .send-btn'
+            send_btn = await page.query_selector(send_selector)
+            if send_btn:
+                await send_btn.click()
+            else:
+                await page.keyboard.press("Enter")
+
+            # 等待豆包回复——最长等待 120 秒（视频分析需要时间）
+            await asyncio.sleep(5)  # 先等一会儿让豆包开始处理
+            response_selector = '.message-content, .markdown-body, .ds-markdown'
+            try:
+                await page.wait_for_selector(response_selector, timeout=120000)
+                await asyncio.sleep(3)  # 等完整内容渲染
+                response_text = await page.text_content(response_selector) or ""
+            except Exception:
+                # 等待结束后尝试获取任意回复内容
+                await asyncio.sleep(10)
+                response_text = await page.text_content("body") or ""
+
+            # 清理输入框准备下一次
+            await page.fill(input_selector, "")
+
+            if response_text and len(response_text.strip()) > 50:
+                return OutlineResult(
+                    aweme_id="",
+                    outline_markdown=response_text.strip(),
+                    raw_response=response_text.strip(),
+                    success=True
+                )
+            else:
+                return OutlineResult(
+                    aweme_id="",
+                    outline_markdown="",
+                    raw_response=response_text,
+                    success=False,
+                    error_message="豆包返回内容过短或为空"
+                )
+        except Exception as e:
             return OutlineResult(
                 aweme_id="",
-                outline_markdown=outline_md,
-                raw_response=outline_md,
-                success=True,
+                outline_markdown="",
+                raw_response=str(e),
+                success=False,
+                error_message=f"豆包调用失败: {str(e)}"
             )
 
-        except Exception as exc:
-            return self._handle_error(exc)
-
-    def _build_prompt(self, title: str, description: str) -> str:
-        """构建发送给豆包模型的 Prompt。
-
-        Args:
-            title: 视频标题。
-            description: 视频描述。
-
-        Returns:
-            完整的 Prompt 字符串。
-        """
-        prompt = (
-            "你是一个视频内容分析助手。请根据以下视频标题，推测视频内容并生成一份结构化的文字提纲。\n"
-            "提纲应包含两级层级（一级要点和二级子要点），以 Markdown 格式输出。\n"
-            f"视频标题：{title}\n"
-        )
-        if description:
-            prompt += f"视频描述：{description}\n"
-        return prompt
-
-    def _handle_error(self, exc: Exception) -> OutlineResult:
-        """将 openai SDK 异常映射为项目异常并返回失败结果。
-
-        Args:
-            exc: openai SDK 抛出的原始异常。
-
-        Returns:
-            包含错误信息的 OutlineResult（success=False）。
-        """
-        import re
-
-        error_message = str(exc)
-        # 脱敏：将 sk- 开头的 API Key 替换为 sk-***
-        error_message = re.sub(r'sk-[A-Za-z0-9_-]+', 'sk-***', error_message)
-
-        # 检查 openai SDK 异常类型（兼容 v1 和 v2）
-        exc_type_name = type(exc).__name__
-        module_name = type(exc).__module__
-
-        # 401 / 403 → AuthError（不应该重试）
-        if exc_type_name in ("AuthenticationError", "PermissionDeniedError"):
-            raise AuthError(error_message) from exc
-
-        # 超时或连接错误 → TimeoutError
-        if exc_type_name in ("APITimeoutError", "APIConnectionError", "Timeout"):
-            raise TimeoutError(error_message) from exc
-
-        # 其他错误 → 返回失败结果（不抛出，由调用方检查 success 字段）
-        return OutlineResult(
-            aweme_id="",
-            outline_markdown="",
-            raw_response="",
-            success=False,
-            error_message=f"AIError: {error_message}",
-        )
+    async def close(self):
+        """关闭浏览器资源。"""
+        if self._browser:
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
+        if self._playwright:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                pass
