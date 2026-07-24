@@ -62,7 +62,15 @@ async def run_pipeline(
     """
     scraper = VideoScraper(config)
     db = ProcessDB()
-    doubao = DoubaoClient(headless=config.headless)
+    doubao_cookies = {}
+    if config.doubao_cookie:
+        for part in config.doubao_cookie.split(";"):
+            if "=" in part:
+                k, _, v = part.strip().partition("=")
+                k = k.strip().lower()
+                if k not in ("domain", "path", "expires", "max-age", "secure", "httponly", "samesite"):
+                    doubao_cookies[k] = v.strip()
+    doubao = DoubaoClient(headless=config.headless, cookies=doubao_cookies)
 
     try:
         # ---- 1) 采集视频列表 ----

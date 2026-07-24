@@ -28,8 +28,9 @@ class DoubaoClient:
     DOUBAO_URL = "https://www.douyin.com"  # 先访问抖音保持 Cookie 域一致
     DOUBAO_CHAT_URL = "https://www.doubao.com/chat/"
 
-    def __init__(self, headless: bool = True):
+    def __init__(self, headless: bool = True, cookies: dict[str, str] | None = None):
         self._headless = headless
+        self._cookies = cookies or {}
         self._playwright = None
         self._browser: Optional[Browser] = None
         self._page: Optional[Page] = None
@@ -45,6 +46,17 @@ class DoubaoClient:
         )
         self._page = await context.new_page()
         await self._page.goto(self.DOUBAO_CHAT_URL, wait_until="domcontentloaded", timeout=30000)
+
+        # 注入豆包 Cookie（如果有）
+        if self._cookies:
+            cookie_list = [
+                {"name": name, "value": value, "domain": ".doubao.com", "path": "/"}
+                for name, value in self._cookies.items()
+            ]
+            await context.add_cookies(cookie_list)
+            # 注入后刷新页面让 Cookie 生效
+            await self._page.goto(self.DOUBAO_CHAT_URL, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(2)
 
         # REV-A-011: 检测 doubao.com 登录状态
         current_url = self._page.url

@@ -30,7 +30,7 @@ class Config:
     必填字段通过 .env / 环境变量注入，可选字段提供合理默认值。
     """
     douyin_cookie: str
-    ark_api_key: Optional[str] = None
+    doubao_cookie: str = ""
     output_dir: str = "./output"
     request_interval_min: float = 2.0
     request_interval_max: float = 5.0
@@ -62,8 +62,8 @@ def load_config() -> Config:
         print("[配置] .env 文件存在但未能加载，请检查文件格式。")
 
     # 读取必填配置
-    ark_api_key = os.getenv("ARK_API_KEY", "").strip() or None
     douyin_cookie = os.getenv("DOUYIN_COOKIE", "").strip()
+    doubao_cookie = os.getenv("DOUBAO_COOKIE", "").strip()
 
     # 校验必填项
     missing: list[str] = []
@@ -88,8 +88,8 @@ def load_config() -> Config:
     )
 
     return Config(
-        ark_api_key=ark_api_key,
         douyin_cookie=douyin_cookie,
+        doubao_cookie=doubao_cookie,
         output_dir=output_dir,
         request_interval_min=request_interval_min,
         request_interval_max=request_interval_max,

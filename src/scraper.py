@@ -366,11 +366,15 @@ class VideoScraper:
                 # 组装完整 URL
                 full_url = f"https://www.douyin.com{href}" if href.startswith("/") else href
 
-                # 提取标题
+                # 提取标题（取含文本最多的 p/span，避免误取点赞数等短数字）
                 title = ""
-                title_el = await item.query_selector(SELECTORS["video_title"])
-                if title_el is not None:
-                    title = (await title_el.inner_text()).strip()
+                title_els = await item.query_selector_all(SELECTORS["video_title"])
+                best_text = ""
+                for t_el in title_els:
+                    t = (await t_el.inner_text()).strip()
+                    if len(t) > len(best_text):
+                        best_text = t
+                title = best_text
 
                 # 提取描述
                 desc = ""
