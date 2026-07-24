@@ -16,10 +16,43 @@ import asyncio
 import random
 import re
 
+import httpx
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from src.config import Config
 from src.models import VideoInfo
+
+# 支持短链解析
+_HTTPX_CLIENT = None
+
+def _get_http_client():
+    global _HTTPX_CLIENT
+    if _HTTPX_CLIENT is None:
+        _HTTPX_CLIENT = httpx.Client(follow_redirects=True, timeout=10)
+    return _HTTPX_CLIENT
+
+def resolve_douyin_url(raw_url: str) -> str:
+    """解析抖音短链为完整 URL。"""
+    # 移除复制粘贴时混入的非 URL 字符（如 "$7 CA1282 9@0.com :9pm" 等）
+    url = raw_url.strip()
+    # 如果包含空格，取第一个看起来像 URL 的部分
+    if " " in url:
+        parts = url.split()
+        for p in parts:
+            if "douyin.com" in p or "iesdouyin.com" in p:
+                url = p
+                break
+    
+    if "v.douyin.com" not in url:
+        return url  # 不是短链，直接返回
+    
+    try:
+        client = _get_http_client()
+        resp = client.head(url)
+        final_url = str(resp.url)
+        return final_url
+    except Exception:
+        return url  # 解析失败，退回原始 URL
 
 # ---------------------------------------------------------------------------
 # DOM 选择器常量
@@ -161,19 +194,34 @@ class VideoScraper:
         支持格式:
             - https://www.douyin.com/user/MS4wLjABAAAA...
             - https://www.douyin.com/user/MS4wLjAB...?modal_id=...
-            - https://www.douyin.com/share/user/...
-            - v.douyin.com 短链（不在此处展开，调用方应预先解析）
+            - https://www.iesdouyin.com/share/user/MS4wLjAB...?sec_uid=...
+            - https://v.douyin.com/xxxxx/ (短链，调用方应先 resolve_douyin_url)
+            - 直接传入纯 sec_uid
 
         Raises:
             ScraperError: URL 无法识别为有效的抖音用户链接。
         """
-        pattern = r"douyin\.com/user/([A-Za-z0-9_-]+)"
-        match = re.search(pattern, user_url)
-        if not match:
-            raise ScraperError(
-                f"无法从 URL 提取用户标识 (sec_uid): {user_url}"
-            )
-        return match.group(1)
+        # 短链解析
+        user_url = resolve_douyin_url(user_url)
+        
+        # 尝试多种模式提取 sec_uid
+        patterns = [
+            r"douyin\.com/user/([A-Za-z0-9_-]+)",
+            r"iesdouyin\.com/share/user/([A-Za-z0-9_-]+)",
+            r"sec_uid=([A-Za-z0-9_-]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, user_url)
+            if match:
+                return match.group(1)
+        
+        # 如果整个 URL 看起来就是一个纯 sec_uid（以 MS4w 开头）
+        if user_url.startswith("MS4w") and len(user_url) > 30:
+            return user_url
+        
+        raise ScraperError(
+            f"无法从 URL 提取用户标识 (sec_uid): {user_url}"
+        )
 
     @staticmethod
     def _parse_cookie(cookie_str: str) -> dict[str, str]:
