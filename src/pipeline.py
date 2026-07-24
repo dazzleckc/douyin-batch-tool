@@ -76,6 +76,18 @@ async def run_pipeline(
         # ---- 1) 采集视频列表 ----
         videos = await scraper.scrape_user_videos(user_url, limit)
 
+        # 输出采集结果清单，便于核对
+        import json as _json
+        scrape_output = os.path.join(output_dir, f"{_extract_user_id(user_url)}_scrape.json")
+        os.makedirs(output_dir, exist_ok=True)
+        scrape_data = [
+            {"aweme_id": v.aweme_id, "url": v.url, "title": v.title, "description": v.description}
+            for v in videos
+        ]
+        with open(scrape_output, "w", encoding="utf-8") as f:
+            _json.dump(scrape_data, f, ensure_ascii=False, indent=2)
+        print(f"\n📋 采集清单已保存: {scrape_output} ({len(videos)} 个视频)")
+
         # ---- 2) 逐视频处理 ----
         records: list[OutputRecord] = []
         errors: list[dict] = []
