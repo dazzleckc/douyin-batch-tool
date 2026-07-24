@@ -151,7 +151,7 @@ class VideoScraper:
 
             # 2) 再导航到博主主页，等待 JS 渲染完成
             try:
-                await page.goto(user_page_url, wait_until="networkidle", timeout=60_000)
+                await page.goto(user_page_url, wait_until="domcontentloaded", timeout=30_000)
             except Exception as exc:
                 raise ScraperError(f"页面加载超时或失败: {exc}") from exc
 
