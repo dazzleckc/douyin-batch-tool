@@ -40,22 +40,44 @@ class DoubaoClient:
             return self._page
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(headless=self._headless)
-        context = await self._browser.new_context(
-            viewport={"width": 1280, "height": 900},
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-        )
+        
+        # 优先使用 storageState（比 Cookie 注入更可靠）
+        import os as _os, json as _json
+        browser_args = {}
+        state_path = "doubao_state.json"
+        if _os.path.exists(state_path):
+            try:
+                with open(state_path) as f:
+                    state = _json.load(f)
+                context = await self._browser.new_context(
+                    storage_state=state,
+                    viewport={"width": 1280, "height": 900},
+                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+                )
+            except Exception:
+                context = await self._browser.new_context(
+                    viewport={"width": 1280, "height": 900},
+                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+                )
+        else:
+            context = await self._browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+            )
+            # 注入豆包 Cookie（如果有）
+            if self._cookies:
+                from urllib.parse import unquote
+                cookie_list = [
+                    {"name": name, "value": unquote(value), "domain": ".doubao.com", "path": "/"}
+                    for name, value in self._cookies.items()
+                ]
+                await context.add_cookies(cookie_list)
+        
         self._page = await context.new_page()
         await self._page.goto(self.DOUBAO_CHAT_URL, wait_until="domcontentloaded", timeout=30000)
-
-        # 注入豆包 Cookie（如果有）—— 值需 URL 解码（DevTools 复制的 Cookie 是 URL-encoded）
-        if self._cookies:
-            from urllib.parse import unquote
-            cookie_list = [
-                {"name": name, "value": unquote(value), "domain": ".doubao.com", "path": "/"}
-                for name, value in self._cookies.items()
-            ]
-            await context.add_cookies(cookie_list)
-            # 注入后刷新页面让 Cookie 生效
+        
+        # 如果有 Cookie 但没有 storageState，注入后刷新
+        if self._cookies and not _os.path.exists(state_path):
             await self._page.goto(self.DOUBAO_CHAT_URL, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(2)
 
