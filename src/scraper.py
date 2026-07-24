@@ -313,7 +313,10 @@ class VideoScraper:
 
         private_el = await page.query_selector(SELECTORS["private_account"])
         if private_el is not None:
-            raise AccessDeniedError("该账号为私密账号，无法采集")
+            text = await private_el.text_content() or ""
+            # 只有页面确实包含"私密"文字才认定
+            if "私密" in text or "private" in text.lower():
+                raise AccessDeniedError("该账号为私密账号，无法采集")
 
         # 无内容不在此处抛出（交由 _scroll_and_extract 判断），仅做日志级检测
         empty_el = await page.query_selector(SELECTORS["no_content"])
