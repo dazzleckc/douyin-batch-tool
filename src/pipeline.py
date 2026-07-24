@@ -29,7 +29,7 @@ from src.config import Config
 from src.models import VideoInfo, OutlineResult, OutputRecord, PipelineResult
 from src.db import ProcessDB
 from src.scraper import VideoScraper
-from src.ai_client import AIClient
+from src.ai_client import AIClient, AuthError
 from src.output import write_results, generate_output_filename
 
 
@@ -91,6 +91,8 @@ async def run_pipeline(
             # 2b) AI 解析
             try:
                 result = ai.generate_outline(video.title, video.description)
+            except AuthError:
+                raise
             except Exception as exc:
                 # AuthError / TimeoutError 等不可恢复异常
                 records.append(OutputRecord(
@@ -156,8 +158,14 @@ async def run_pipeline(
         )
 
     finally:
-        await scraper.close()
-        db.close()
+        try:
+            await scraper.close()
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 def _extract_user_id(user_url: str) -> str:

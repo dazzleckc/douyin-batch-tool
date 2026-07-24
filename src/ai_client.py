@@ -102,7 +102,11 @@ class AIClient:
         Returns:
             包含错误信息的 OutlineResult（success=False）。
         """
+        import re
+
         error_message = str(exc)
+        # 脱敏：将 sk- 开头的 API Key 替换为 sk-***
+        error_message = re.sub(r'sk-[A-Za-z0-9_-]+', 'sk-***', error_message)
 
         # 检查 openai SDK 异常类型（兼容 v1 和 v2）
         exc_type_name = type(exc).__name__

@@ -318,7 +318,6 @@ class VideoScraper:
             # 滚动并等待新内容渲染
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(random.uniform(interval_min, interval_max))
-            await page.wait_for_timeout(1500)
 
         return videos
 

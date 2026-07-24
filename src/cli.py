@@ -10,6 +10,7 @@
 
 import argparse
 import asyncio
+import os
 import sys
 
 from src.config import load_config, ConfigurationError
@@ -83,6 +84,26 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
+    # 参数校验
+    if args.limit is not None and args.limit <= 0:
+        print("错误: --limit 必须为正整数", file=sys.stderr)
+        return 1
+    if args.interval_min > args.interval_max:
+        print("错误: --interval-min 不能大于 --interval-max", file=sys.stderr)
+        return 1
+    if args.interval_min < 0 or args.interval_max < 0:
+        print("错误: 间隔值不能为负数", file=sys.stderr)
+        return 1
+
+    # --output 路径遍历防护：确保输出目录在项目目录内
+    project_root = os.path.realpath(
+        "/Users/chenkaichen/WorkBuddy/抖音批量采集批处理工具/"
+    )
+    output_real = os.path.realpath(args.output)
+    if not output_real.startswith(project_root + os.sep) and output_real != project_root:
+        print("错误: --output 路径必须在项目目录内", file=sys.stderr)
+        return 1
+
     # 1. 加载配置
     try:
         config = load_config()
@@ -133,7 +154,7 @@ def main() -> int:
     if result.errors:
         print(f"\n失败详情:")
         for err in result.errors[:10]:  # 只展示前 10 个
-            print(f"  - {err.get('title', 'Unknown')}: {err.get('error', 'Unknown error')}")
+            print(f"  - {err.get('aweme_id', err.get('title', 'Unknown'))}: {err.get('error', 'Unknown error')}")
     print(f"{'=' * 50}")
 
     return 0  # 部分失败仍返回 0（非致命）
