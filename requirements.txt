@@ -1,3 +1,2 @@
 playwright==1.61.0
-python-dotenv==1.2.2
 tqdm==4.68.3

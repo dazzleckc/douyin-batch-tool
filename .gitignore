@@ -1,4 +1,22 @@
+# Environment
 .env
-*.db
+
+# macOS
+.DS_Store
+
+# Python
 __pycache__/
+*.pyc
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
 output/
+*_state.json
+
+# Configuration (copy from example to use)
+targets.json
+
+# WorkBuddy project data
+.workbuddy/
