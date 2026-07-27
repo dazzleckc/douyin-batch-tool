@@ -18,6 +18,8 @@ class ProcessDB:
         - 消费者（AI）： 视频是否已生成提纲（解析完成）
     """
 
+    _SCHEMA_VERSION = 1
+
     def __init__(self, db_path: str = "processed.db") -> None:
         self._conn = sqlite3.connect(db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -32,18 +34,31 @@ class ProcessDB:
             )
             """
         )
+        # Schema version marker table（独立于业务表，仅用于迁移版本管理）
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER NOT NULL)"
+        )
         self._conn.commit()
-        self._migrate_statuses()
+        self._migrate()
 
-    def _migrate_statuses(self) -> None:
-        """将旧版状态值迁移为新版命名（success→parsed, scraped→known, failed→known）。"""
-        self._conn.execute(
-            "UPDATE processed_videos SET status = 'parsed' WHERE status = 'success'"
-        )
-        self._conn.execute(
-            "UPDATE processed_videos SET status = 'known' WHERE status IN ('scraped', 'failed')"
-        )
-        self._conn.commit()
+    def _migrate(self) -> None:
+        """按版本号增量迁移数据库 schema，每个版本只执行一次。"""
+        current = self._conn.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM _schema_version"
+        ).fetchone()[0]
+
+        if current < 1:
+            # v1: 将旧版状态值迁移为新版命名（success→parsed, scraped→known, failed→known）
+            self._conn.execute(
+                "UPDATE processed_videos SET status = 'parsed' WHERE status = 'success'"
+            )
+            self._conn.execute(
+                "UPDATE processed_videos SET status = 'known' WHERE status IN ('scraped', 'failed')"
+            )
+            self._conn.execute(
+                "INSERT INTO _schema_version (version) VALUES (1)"
+            )
+            self._conn.commit()
 
     # =========================================================================
     # 生产者维度：采集去重 —— "这个视频 ID 我知道吗？"
