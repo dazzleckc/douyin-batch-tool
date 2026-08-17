@@ -138,7 +138,7 @@ def main() -> int:
 
     执行流程：
         1. 解析命令行参数
-        2. 加载配置（.env）
+        2. 加载环境变量配置
         3. CLI 参数覆盖配置
         4. 展示合规声明
         5. 用户确认
@@ -315,13 +315,19 @@ def _run_all(user_url, args, config) -> int:
 def _print_pipeline_result(result) -> None:
     """打印流水线结果摘要。"""
     print(f"\n{'=' * 50}")
-    print("处理完成！")
+    print("已安全中断，断点已保存。" if result.interrupted else "处理完成！")
     print(f"  总计视频: {result.total}")
     print(f"  成功处理: {result.processed}")
     print(f"  跳过(已处理): {result.skipped}")
     print(f"  失败: {result.failed}")
     if result.output_file:
         print(f"  输出文件: {result.output_file}")
+    print(f"  本批增量: {result.increment_count}")
+    if result.increment_files:
+        for path in result.increment_files:
+            print(f"  增量文件: {path}")
+    else:
+        print("  增量文件: 未生成（本次没有新增成功提纲）")
     if result.errors:
         print(f"\n失败详情:")
         for err in result.errors[:10]:

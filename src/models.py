@@ -32,6 +32,8 @@ class OutputRecord:
     outline: str
     timestamp: str
     status: str  # "success" | "failed" | "skipped"
+    aweme_id: str = ""
+    batch_id: str = ""
 
 
 @dataclass
@@ -43,6 +45,9 @@ class PipelineResult:
     failed: int
     errors: list[dict] = field(default_factory=list)
     output_file: str = ""
+    increment_count: int = 0
+    increment_files: list[str] = field(default_factory=list)
+    interrupted: bool = False
 
 
 @dataclass
@@ -58,3 +63,6 @@ class ScrapeCheckpoint:
     total: int = 0
     new_count: int = 0        # 本次新采集的视频数
     skipped_count: int = 0    # 已在DB中跳过的视频数
+    batch_id: str = ""        # 最近一次新增批次；旧 checkpoint 默认为空
+    batch_aweme_ids: list[str] = field(default_factory=list)
+    batch_completed: bool = False  # 当前批次全部成功后置 True；旧 checkpoint 默认未完成

@@ -67,7 +67,7 @@ def resolve_douyin_url(raw_url: str) -> str:
 # 抖音页面结构经常变化，优先匹配语义化的 a[href] 而非 class 名
 # ---------------------------------------------------------------------------
 SELECTORS: dict[str, str] = {
-    "video_item": 'a[href*="/video/"]',
+    "video_item": '[data-e2e="user-post-list"] a[href*="/video/"]',
     "video_title": 'p, span',
     "video_desc": 'p, span',
     "user_not_found": '[class*="error"], [class*="not-found"]',
@@ -123,17 +123,27 @@ class VideoScraper:
         self._process_db = process_db
         self._playwright = None
         self._browser: Browser | None = None
+        self.last_expected_total: int | None = None
+        self.last_visible_video_count = 0
+        self.last_known_seen_count = 0
+        self.last_unresolved_new_count = 0
+        self.last_accounted_total = 0
 
     # --- 公开方法 ------------------------------------------------------------
 
     async def scrape_user_videos(
-        self, user_url: str, limit: int | None = None
+        self,
+        user_url: str,
+        limit: int | None = None,
+        processed_ids: set[str] | None = None,
     ) -> list[VideoInfo]:
         """采集指定博主主页的公开视频列表。
 
         Args:
             user_url: 抖音博主主页 URL（如 https://www.douyin.com/user/MS4w...）。
-            limit:   最大采集视频数，None 表示不限制。
+            limit:         最大采集视频数，None 表示不限制。
+            processed_ids: 当前博主已在 checkpoint 中的 aweme_id；未传时
+                           兼容旧调用，从 process_db 读取。
 
         Returns:
             list[VideoInfo]: 视频信息列表。
@@ -148,9 +158,12 @@ class VideoScraper:
         user_page_url = f"https://www.douyin.com/user/{sec_uid}"
 
         # 加载已处理ID列表（增量模式）
-        processed_ids: set[str] = set()
-        if self._process_db is not None:
-            processed_ids = self._process_db.get_known_ids()
+        if processed_ids is None:
+            processed_ids = set()
+            if self._process_db is not None:
+                processed_ids = self._process_db.get_known_ids()
+        else:
+            processed_ids = set(processed_ids)
 
         context = await self._create_context()
         page: Page = await context.new_page()
@@ -174,17 +187,18 @@ class VideoScraper:
             # 3) 滚动加载并提取视频列表
             videos = await self._scroll_and_extract(page, limit, processed_ids)
 
+            inconsistent_error = self._result_consistency_error(
+                len(processed_ids), len(videos)
+            )
+            if inconsistent_error:
+                await self._save_debug_page(page)
+                raise ScraperError(inconsistent_error)
+
             if not videos:
                 # 增量模式：全部已知则正常返回空列表（非错误）
                 if processed_ids:
                     return videos
-                try:
-                    html = await page.content()
-                    _os.makedirs("output", exist_ok=True)
-                    with open("output/debug_scraper_page.html", "w", encoding="utf-8") as f:
-                        f.write(html[:50000])
-                except Exception:
-                    pass
+                await self._save_debug_page(page)
                 raise NoVideosError(
                     f"博主 {sec_uid} 没有可采集的公开视频"
                     f"（页面源码已保存到 output/debug_scraper_page.html）"
@@ -194,6 +208,68 @@ class VideoScraper:
 
         finally:
             await context.close()
+
+    def _result_consistency_error(
+        self, processed_count: int, result_count: int
+    ) -> str | None:
+        """拒绝与页面作品总数冲突的结果，避免推荐区链接进入 checkpoint。"""
+        if self.last_expected_total is None:
+            return self._empty_result_error(processed_count) if result_count == 0 else None
+
+        if processed_count > self.last_expected_total:
+            return (
+                f"当前博主 checkpoint 有 {processed_count} 条，但页面仅显示 "
+                f"{self.last_expected_total} 个作品。已在滚动前停止；"
+                "请先修复 checkpoint 中的非作品记录。页面源码已保存到 "
+                "output/debug_scraper_page.html"
+            )
+
+        expected_increment = self.last_expected_total - processed_count
+        if result_count > expected_increment:
+            return (
+                f"页面与 checkpoint 的差额为 {expected_increment}，但采集到 "
+                f"{result_count} 个新增候选，疑似混入推荐区视频。"
+                "已停止且不会更新 checkpoint；页面源码已保存到 "
+                "output/debug_scraper_page.html"
+            )
+        if result_count < expected_increment:
+            return (
+                f"页面与 checkpoint 的差额为 {expected_increment}，但仅采集到 "
+                f"{result_count} 个新增候选。已停止以避免漏采；页面源码已保存到 "
+                "output/debug_scraper_page.html"
+            )
+        return None
+
+    def _empty_result_error(self, processed_count: int) -> str | None:
+        """判断空结果是否与页面或 checkpoint 事实冲突。"""
+        if self.last_unresolved_new_count:
+            return (
+                f"页面发现 {self.last_unresolved_new_count} 个未处理视频链接，"
+                "但标题/描述持续未渲染，已停止以避免误报无新增。"
+                "页面源码已保存到 output/debug_scraper_page.html"
+            )
+        if (
+            self.last_expected_total is not None
+            and self.last_expected_total > processed_count
+        ):
+            return (
+                f"页面显示 {self.last_expected_total} 个作品，但当前博主 "
+                f"checkpoint 仅有 {processed_count} 条，采集结果却为 0。"
+                "已停止以避免漏采；页面源码已保存到 "
+                "output/debug_scraper_page.html"
+            )
+        return None
+
+    @staticmethod
+    async def _save_debug_page(page: Page) -> None:
+        """保存完整诊断页面，不影响原 checkpoint/DB。"""
+        try:
+            html = await page.content()
+            _os.makedirs("output", exist_ok=True)
+            with open("output/debug_scraper_page.html", "w", encoding="utf-8") as f:
+                f.write(html)
+        except Exception:
+            pass
 
     async def close(self) -> None:
         """关闭浏览器与 Playwright 资源。"""
@@ -455,18 +531,42 @@ class VideoScraper:
         """
         videos: list[VideoInfo] = []
         seen_ids: set[str] = set()
+        visible_ids: set[str] = set()
+        known_seen_ids: set[str] = set()
+        unresolved_new_ids: set[str] = set()
+        processed_ids = set(processed_ids or set())
         expected_total = await self._extract_expected_total(page)
         interval_min = self._config.request_interval_min
         interval_max = self._config.request_interval_max
 
+        def publish_diagnostics() -> None:
+            self.last_expected_total = expected_total
+            self.last_visible_video_count = len(visible_ids)
+            self.last_known_seen_count = len(known_seen_ids)
+            self.last_unresolved_new_count = len(unresolved_new_ids)
+            self.last_accounted_total = len(known_seen_ids) + len(videos)
+
+        publish_diagnostics()
+
         if expected_total:
             print(f"   📊 页面显示作品数: {expected_total}")
+
+        # checkpoint 比页面作品数还多是确定性污染，不需要滚动页面确认。
+        if expected_total is not None and len(processed_ids) > expected_total:
+            publish_diagnostics()
+            return []
+
+        expected_increment = (
+            max(expected_total - len(processed_ids), 0)
+            if expected_total is not None
+            else None
+        )
 
         all_processed_page_count = 0
         max_all_processed_pages = 2
         no_new_count = 0
-        # 退避：无新视频时逐渐拉长间隔和容忍次数
-        max_no_new_base = 3
+        # 新作品位于主页顶部：首屏加一次复核即可，避免空转八轮。
+        max_no_new_base = 2
         backoff_mul = 1.0
 
         while True:
@@ -483,21 +583,27 @@ class VideoScraper:
                 aweme_id = self._extract_aweme_id(href)
                 if not aweme_id or aweme_id in seen_ids:
                     continue
-                seen_ids.add(aweme_id)
+                visible_ids.add(aweme_id)
 
                 # 增量模式：跳过已处理的视频
                 if processed_ids and aweme_id in processed_ids:
+                    seen_ids.add(aweme_id)
+                    known_seen_ids.add(aweme_id)
                     continue
 
                 page_all_processed = False
-                new_found = True
 
                 full_url = f"https://www.douyin.com{href}" if href.startswith("/") else href
                 title, desc = await self._extract_title_and_desc(item)
 
-                # 过滤脏数据：标题和描述都为空的无意义条目
+                # 标题/描述可能晚于链接渲染；此时保留候选，下一轮继续尝试。
                 if not title and not desc:
+                    unresolved_new_ids.add(aweme_id)
                     continue
+
+                unresolved_new_ids.discard(aweme_id)
+                seen_ids.add(aweme_id)
+                new_found = True
 
                 # 检测置顶标记
                 is_pinned = "置顶" in (await item.inner_text())
@@ -511,29 +617,27 @@ class VideoScraper:
                 ))
 
                 if limit is not None and len(videos) >= limit:
+                    publish_diagnostics()
                     print(f"   📊 已采集: {len(videos)} (达到 limit={limit})")
                     return videos[:limit]
 
+            publish_diagnostics()
+
             # 进度输出
-            target_str = f"/{expected_total}" if expected_total else ""
             if new_found:
-                print(f"   📊 已采集: {len(videos)}{target_str}")
+                if expected_total:
+                    print(
+                        f"   📊 已采集新增: {len(videos)} "
+                        f"(checkpoint {len(processed_ids)} / 页面 {expected_total})"
+                    )
+                else:
+                    print(f"   📊 已采集新增: {len(videos)}")
 
-            # 达到或超过目标，再等一轮确认没有漏的则停止
-            if expected_total and len(videos) >= expected_total:
-                # 比目标多了也不强制停止——再滚一次确认
-                if no_new_count >= 1:  # 已经有一轮没新视频了
-                    print(f"   ✅ 采集完成: {len(videos)} (页面显示 {expected_total})")
-                    break
-
-            # 增量模式：整页全已处理时提前停止
-            if processed_ids and page_all_processed:
-                all_processed_page_count += 1
-                if all_processed_page_count >= max_all_processed_pages:
-                    break
-            else:
-                all_processed_page_count = 0
-
+            # 达到页面与 checkpoint 的预期差额后，再等一轮确认顶部无遗漏。
+            expected_gap = bool(
+                expected_increment is not None
+                and len(videos) < expected_increment
+            )
             # 无新视频时退避
             if not new_found:
                 no_new_count += 1
@@ -542,15 +646,38 @@ class VideoScraper:
                 no_new_count = 0
                 backoff_mul = 1.0
 
-            # 退避后的停止阈值：如果已经达到目标，可以宽容；否则持续等待
+            if (
+                expected_increment is not None
+                and len(videos) >= expected_increment
+                and no_new_count >= 1
+            ):
+                print(
+                    f"   ✅ 顶部复核完成: 新增 {len(videos)} "
+                    f"(预期差额 {expected_increment})"
+                )
+                break
+
+            # 增量模式：整页全已处理时提前停止
+            if (
+                processed_ids
+                and items
+                and page_all_processed
+                and not unresolved_new_ids
+                and not expected_gap
+            ):
+                all_processed_page_count += 1
+                if all_processed_page_count >= max_all_processed_pages:
+                    break
+            else:
+                all_processed_page_count = 0
+
+            # 两轮无进展就停止，由结果一致性检查决定成功或明确报错。
             effective_max = max_no_new_base
-            if expected_total and len(videos) < expected_total:
-                effective_max = 8  # 有目标时更宽容，给页面更多加载时间
 
             if no_new_count >= effective_max:
-                if expected_total and len(videos) < expected_total:
-                    print(f"   ⚠️  采集提前停止: {len(videos)}/{expected_total} "
-                          f"(连续 {effective_max} 次滚动无新视频，可能部分视频不可见)")
+                if expected_gap:
+                    print(f"   ⚠️  顶部复核未达到预期差额: "
+                          f"新增 {len(videos)} / 预期 {expected_increment}")
                 break
 
             # 滚动——优先滚到最后一个视频元素，触发懒加载
@@ -562,7 +689,10 @@ class VideoScraper:
                 await self._smart_scroll(page, items, backoff_mul, interval_min, interval_max)
 
         # 循环结束后的兜底提取：可能有最后一两个视频刚被懒加载渲染
-        if expected_total and len(videos) < expected_total:
+        if (
+            expected_increment is not None
+            and len(videos) < expected_increment
+        ) or unresolved_new_ids:
             before_final = len(videos)
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(4.0)
@@ -574,21 +704,27 @@ class VideoScraper:
                 aweme_id = self._extract_aweme_id(href)
                 if not aweme_id or aweme_id in seen_ids:
                     continue
-                seen_ids.add(aweme_id)
+                visible_ids.add(aweme_id)
                 if processed_ids and aweme_id in processed_ids:
+                    seen_ids.add(aweme_id)
+                    known_seen_ids.add(aweme_id)
                     continue
                 full_url = f"https://www.douyin.com{href}" if href.startswith("/") else href
                 title, desc = await self._extract_title_and_desc(item)
                 if not title and not desc:
+                    unresolved_new_ids.add(aweme_id)
                     continue
+                unresolved_new_ids.discard(aweme_id)
+                seen_ids.add(aweme_id)
                 is_pinned = "置顶" in (await item.inner_text())
                 videos.append(VideoInfo(
                     aweme_id=aweme_id, url=full_url, title=title,
                     description=desc, is_pinned=is_pinned,
                 ))
             if len(videos) > before_final:
-                print(f"   📊 已采集: {len(videos)}/{expected_total} (兜底补采 {len(videos) - before_final} 个)")
+                print(f"   📊 已采集新增: {len(videos)} (兜底补采 {len(videos) - before_final} 个)")
 
+        publish_diagnostics()
         return videos
 
     @staticmethod
@@ -597,24 +733,30 @@ class VideoScraper:
 
         优先在 Tab 标签区域查找（更精确），回退到全页面搜索。
         """
-        # 优先查找 Tab 区域的 "作品 N"（常见的抖音用户页结构）
-        try:
-            tab_area = await page.query_selector('[class*="tab"], [class*="profile"], [class*="user-tab"]')
-            if tab_area:
-                text = await tab_area.text_content() or ""
-            else:
-                text = await page.text_content("body") or ""
-        except Exception:
-            try:
-                text = await page.text_content("body") or ""
-            except Exception:
-                return None
-
         import re as _re
-        match = _re.search(r"作品\s*[:：]?\s*(\d[\d,]*)", text[:3000])
-        if match:
-            return int(match.group(1).replace(",", ""))
-        return None
+
+        def parse_total(text: str) -> int | None:
+            match = _re.search(r"作品\s*[:：]?\s*(\d[\d,]*)", text)
+            if match:
+                return int(match.group(1).replace(",", ""))
+            return None
+
+        # 广泛 class 选择器可能先命中无关 profile；逐个检查，未找到再回退 body。
+        try:
+            tab_areas = await page.query_selector_all(
+                '[class*="tab"], [class*="profile"], [class*="user-tab"]'
+            )
+            for tab_area in tab_areas:
+                total = parse_total(await tab_area.text_content() or "")
+                if total is not None:
+                    return total
+        except Exception:
+            pass
+
+        try:
+            return parse_total(await page.text_content("body") or "")
+        except Exception:
+            return None
 
     @staticmethod
     async def _extract_title_and_desc(item) -> tuple[str, str]:
@@ -632,6 +774,50 @@ class VideoScraper:
         desc_el = await item.query_selector(SELECTORS["video_desc"])
         if desc_el is not None:
             desc = (await desc_el.inner_text()).strip()
+
+        if not title and not desc:
+            fallback_candidates: list[str] = []
+
+            # 新版卡片可能把标题放在链接自身的可访问属性中。
+            for attr in ("aria-label", "title"):
+                try:
+                    value = (await item.get_attribute(attr) or "").strip()
+                except Exception:
+                    value = ""
+                if value:
+                    fallback_candidates.append(value)
+
+            # 图片 alt、子元素 aria-label/title 也是常见的语义来源。
+            try:
+                semantic_nodes = await item.query_selector_all(
+                    '[aria-label], [title], img[alt]'
+                )
+            except Exception:
+                semantic_nodes = []
+            for node in semantic_nodes:
+                for attr in ("aria-label", "title", "alt"):
+                    try:
+                        value = (await node.get_attribute(attr) or "").strip()
+                    except Exception:
+                        value = ""
+                    if value:
+                        fallback_candidates.append(value)
+
+            # 最后回退到链接自身文本；过滤纯“置顶”等非标题噪声。
+            try:
+                own_text = (await item.inner_text()).strip()
+            except Exception:
+                own_text = ""
+            if own_text:
+                fallback_candidates.append(own_text)
+
+            noise = {"置顶", "播放", "点赞", "评论", "分享"}
+            meaningful = [
+                text for text in fallback_candidates
+                if text not in noise and not text.startswith("http")
+            ]
+            if meaningful:
+                title = max(meaningful, key=len)
         return title, desc
 
     @staticmethod
