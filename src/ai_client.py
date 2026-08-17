@@ -14,6 +14,7 @@ import asyncio
 import json as _json
 import os as _os
 import re
+from datetime import datetime
 from typing import Optional
 from urllib.parse import unquote
 
@@ -37,7 +38,15 @@ class DoubaoClient:
     """
 
     DOUBAO_CHAT_URL = "https://www.doubao.com/chat/"
-    INPUT_SELECTOR = 'textarea[placeholder="发消息..."]'
+    INPUT_SELECTORS = (
+        'textarea[data-testid="chat_input_input"]',
+        '[data-testid="chat_input_input"]',
+        'textarea[placeholder*="发消息"]',
+        'textarea[placeholder*="输入"]',
+        '[contenteditable="true"][data-slate-editor="true"]',
+        '[contenteditable="true"][role="textbox"]',
+    )
+    INPUT_TIMEOUT = 10000
 
     PROMPT_TEMPLATE = (
         "无需查阅其他参考资料，请获取以下抖音视频的内容，并为其生成一个详细的内容大纲。"
@@ -210,6 +219,52 @@ class DoubaoClient:
         raw = js_result[idx + len(anchor):].strip()
         return DoubaoClient._clean_reply(raw)
 
+    @classmethod
+    async def _find_chat_input(cls, page: Page):
+        """查找当前可见且可编辑的豆包输入框，兼容 textarea/contenteditable。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + cls.INPUT_TIMEOUT / 1000
+
+        while True:
+            for selector in cls.INPUT_SELECTORS:
+                try:
+                    candidates = await page.query_selector_all(selector)
+                except Exception:
+                    continue
+                for candidate in candidates:
+                    try:
+                        if await candidate.is_visible() and await candidate.is_editable():
+                            return candidate, selector
+                    except Exception:
+                        continue
+
+            if loop.time() >= deadline:
+                return None, ""
+            await asyncio.sleep(0.25)
+
+    @staticmethod
+    async def _save_debug_page(page: Page) -> str:
+        """完整保存失败页面与截图；诊断失败不覆盖原始异常。"""
+        try:
+            _os.makedirs("output", exist_ok=True)
+            suffix = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{id(page)}"
+            html_path = _os.path.abspath(
+                _os.path.join("output", f"debug_doubao_page_{suffix}.html")
+            )
+            png_path = _os.path.abspath(
+                _os.path.join("output", f"debug_doubao_page_{suffix}.png")
+            )
+            html = await page.content()
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html)
+            try:
+                await page.screenshot(path=png_path, full_page=True)
+            except Exception:
+                pass
+            return html_path
+        except Exception:
+            return ""
+
     async def generate_outline(self, title: str, video_url: str, description: str = "") -> OutlineResult:
         """贴视频 URL 到豆包，等待流式回复完整生成后返回提纲。
 
@@ -250,10 +305,15 @@ class DoubaoClient:
                     continue
 
             # 2) 发送
-            await page.wait_for_selector(self.INPUT_SELECTOR, timeout=10000)
-            await page.fill(self.INPUT_SELECTOR, prompt)
+            input_element, _ = await self._find_chat_input(page)
+            if input_element is None:
+                raise RuntimeError(
+                    "未找到可用的豆包消息输入框"
+                    f"（已尝试 {', '.join(self.INPUT_SELECTORS)}）"
+                )
+            await input_element.fill(prompt)
             await asyncio.sleep(0.5)
-            await page.keyboard.press("Enter")
+            await input_element.press("Enter")
 
             # 发送后再次检查验证码弹窗（发送操作本身可能触发验证）
             captcha = await self._detect_captcha_modal(page)
@@ -271,11 +331,17 @@ class DoubaoClient:
             return OutlineResult("", "", reply or "", False, "豆包返回内容过短")
 
         except DoubaoError:
+            await self._save_debug_page(page)
             await page.close()
             raise
         except Exception as e:
+            debug_path = await self._save_debug_page(page)
             await page.close()
-            return OutlineResult("", "", str(e), False, f"豆包调用失败: {e}")
+            debug_hint = f"；页面源码已保存到 {debug_path}" if debug_path else ""
+            return OutlineResult(
+                "", "", str(e), False,
+                f"豆包调用失败: {e}{debug_hint}",
+            )
 
     async def _wait_for_stable_reply(self, page: Page, prompt: str) -> str:
         """流式稳定检测：连续 N 轮文本不再增长 → 完成。
